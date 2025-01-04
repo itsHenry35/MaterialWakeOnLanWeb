@@ -76,8 +76,8 @@ function sendSleepPacket($macAddress, $broadcastIP, $port) {
     return $sent === false ? "Failed to send sleep packet." : "Sleep packet sent.";
 }
 
-function checkStatus($address, $port) {
-    $socket = @fsockopen($address, $port, $errno, $errstr, 2);
+function checkStatus($address, $port, $timeout = 2) {
+    $socket = @fsockopen($address, $port, $errno, $errstr, $timeout);
     if ($socket) {
         fclose($socket);
         return true;
@@ -227,8 +227,15 @@ if (!isset($_SESSION['authenticated'])) {
     exit;
 }
 
+
 if (isset($_GET['action']) && $_GET['action'] === 'status') {
-    echo json_encode(['status' => checkStatus($config['network']['tcping_address'], $config['network']['tcping_port'])]);
+    echo json_encode([
+        'status' => checkStatus(
+            $config['network']['tcping_address'], 
+            $config['network']['tcping_port'],
+            2
+        )
+    ]);
     exit;
 }
 
@@ -251,6 +258,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     echo json_encode(['result' => $result]);
     exit;
 }
+
+$initialStatus = checkStatus(
+    $config['network']['tcping_address'], 
+    $config['network']['tcping_port'],
+    0.5
+);
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -409,23 +423,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <h2 class="card-title"><?= htmlspecialchars($config['network']['device_name']) ?></h2>
             <div class="status-container">
                 <span>Status:</span>
-                <span id="status-dot" class="status-dot status-offline"></span>
-                <span id="status-text" style="margin-left: 8px;">Offline</span>
+                <span id="status-dot" class="status-dot status-<?= $initialStatus ? 'online' : 'offline' ?>"></span>
+                <span id="status-text" style="margin-left: 8px;"><?= $initialStatus ? 'Online' : 'Offline' ?></span>
             </div>
             <div class="button-container">
-                <button id="wake-btn" class="button button-filled" style="display: none;">
+                <button id="wake-btn" class="button button-filled" style="display: <?= $initialStatus ? 'none' : 'inline-flex' ?>;">
                     <span class="material-symbols-outlined">power_settings_new</span>
                     Wake
                 </button>
-                <button id="sleep-btn" class="button button-filled" style="display: none;">
+                <button id="sleep-btn" class="button button-filled" style="display: <?= $initialStatus ? 'inline-flex' : 'none' ?>;">
                     <span class="material-symbols-outlined">bedtime</span>
                     Sleep
                 </button>
-                <button id="rdp-btn" class="button button-tonal" style="display: none;">
+                <button id="rdp-btn" class="button button-tonal" style="display: <?= $initialStatus ? 'inline-flex' : 'none' ?>;">
                     <span class="material-symbols-outlined">desktop_windows</span>
                     RDP
                 </button>
-                <a id="novnc-btn" href="<?= htmlspecialchars($config['network']['novnc_url']) ?>" class="button button-tonal" target="_blank" style="display: none;">
+                <a id="novnc-btn" href="<?= htmlspecialchars($config['network']['novnc_url']) ?>" class="button button-tonal" target="_blank" style="display: <?= $initialStatus ? 'inline-flex' : 'none' ?>;">
                     <span class="material-symbols-outlined">desktop_windows</span>
                     NoVNC
                 </a>
@@ -448,10 +462,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
 
     <script>
-            document.getElementById('rdp-btn').addEventListener('click', () => {
-            window.location.href = '?action=rdp';
-        });
+        let statusCheckInProgress = false;
+        
         function refreshStatus() {
+            if (statusCheckInProgress) {
+                return;
+            }
+        
+            statusCheckInProgress = true;
             fetch('?action=status')
                 .then(response => response.json())
                 .then(data => {
@@ -464,69 +482,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         isOnline ? 'none' : 'inline-flex';
                     document.getElementById('sleep-btn').style.display = 
                         isOnline ? 'inline-flex' : 'none';
+                    document.getElementById('rdp-btn').style.display = 
+                        isOnline ? 'inline-flex' : 'none';
+                    document.getElementById('novnc-btn').style.display = 
+                        isOnline ? 'inline-flex' : 'none';
+                })
+                .catch(error => {
+                    console.error('Status check failed:', error);
+                })
+                .finally(() => {
+                    statusCheckInProgress = false;
+                    setTimeout(refreshStatus, 1000);
                 });
         }
-
-        function refreshStatus() {
-   fetch('?action=status')
-       .then(response => response.json())
-       .then(data => {
-           const isOnline = data.status;
-           document.getElementById('status-dot').className = 
-               `status-dot status-${isOnline ? 'online' : 'offline'}`;
-           document.getElementById('status-text').textContent = 
-               isOnline ? 'Online' : 'Offline';
-           
-           // Control visibility of buttons based on status
-           document.getElementById('wake-btn').style.display = 
-               isOnline ? 'none' : 'inline-flex';
-           document.getElementById('sleep-btn').style.display = 
-               isOnline ? 'inline-flex' : 'none';
-           document.getElementById('rdp-btn').style.display = 
-               isOnline ? 'inline-flex' : 'none';
-           document.getElementById('novnc-btn').style.display = 
-               isOnline ? 'inline-flex' : 'none';
-       });
-}
-
-        function sendAction(action) {
-           const formData = new FormData();
-           formData.append('action', action);
         
-           fetch('', {
-               method: 'POST',
-               body: formData
-           })
-           .then(response => response.json())
-           .then(data => {
-               document.getElementById('modal-result-text').textContent = data.result;
-               document.getElementById('result-modal').style.display = 'flex';
-               refreshStatus();
-           });
+        function sendAction(action) {
+            const formData = new FormData();
+            formData.append('action', action);
+        
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('modal-result-text').textContent = data.result;
+                document.getElementById('result-modal').style.display = 'flex';
+                refreshStatus();
+            });
         }
         
         document.addEventListener('DOMContentLoaded', () => {
-           refreshStatus();
-           setInterval(refreshStatus, 1000);
+            // Start status checking after initial page load
+            setTimeout(refreshStatus, 1000);
         
-           document.getElementById('wake-btn').addEventListener('click', () => {
-               sendAction('wake');
-           });
+            document.getElementById('wake-btn').addEventListener('click', () => {
+                sendAction('wake');
+            });
         
-           document.getElementById('sleep-btn').addEventListener('click', () => {
-               sendAction('sleep');
-           });
+            document.getElementById('sleep-btn').addEventListener('click', () => {
+                sendAction('sleep');
+            });
         
-           document.querySelector('.modal-close').addEventListener('click', () => {
-               document.getElementById('result-modal').style.display = 'none';
-           });
+            document.getElementById('rdp-btn').addEventListener('click', () => {
+                window.location.href = '?action=rdp';
+            });
         
-           document.getElementById('result-modal').addEventListener('click', (e) => {
-               if (e.target === document.getElementById('result-modal')) {
-                   document.getElementById('result-modal').style.display = 'none';
-               }
-           });
+            document.querySelector('.modal-close').addEventListener('click', () => {
+                document.getElementById('result-modal').style.display = 'none';
+            });
+        
+            document.getElementById('result-modal').addEventListener('click', (e) => {
+                if (e.target === document.getElementById('result-modal')) {
+                    document.getElementById('result-modal').style.display = 'none';
+                }
+            });
         });
-        </script>
+</script>
 </body>
 </html>
